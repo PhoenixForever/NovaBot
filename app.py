@@ -74,6 +74,7 @@ PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 
 
 def send_whatsapp_message(to, message_text):
+    message_text = message_text[:4000]
     url = f"https://graph.facebook.com/v26.0/{PHONE_NUMBER_ID}/messages"
 
     headers = {
