@@ -193,7 +193,9 @@ def receive_message():
 
 
 
-if __name__ == "__main__":
+if not scheduler.running:
     scheduler.start()
     print("NovaBot reminder scheduler is running!")
+
+if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
