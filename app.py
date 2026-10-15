@@ -12,6 +12,11 @@ import json
 
 from groq import Groq
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("apscheduler").setLevel(logging.DEBUG)
+
 load_dotenv()
 
 app = Flask(__name__)
