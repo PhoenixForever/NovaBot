@@ -36,11 +36,17 @@ def extract_reminder_time(user_message):
 
 scheduler = BackgroundScheduler()
 
-def send_reminder(phone_number, reminder_text):
-    print("Sending reminder to:", phone_number)
-    print("Reminder:", reminder_text)
 
-    send_whatsapp_message(phone_number, "🔔 NovaBot Reminder: " + reminder_text)
+def send_reminder(phone_number, reminder_text):
+    print("🚨 REMINDER FUNCTION STARTED!", flush=True)
+    print("Sending reminder to:", phone_number, flush=True)
+    print("Reminder:", reminder_text, flush=True)
+
+    send_whatsapp_message(
+        phone_number,
+        "🔔 NovaBot Reminder: " + reminder_text
+    )
+
 
 processed_message_ids = set()
 
