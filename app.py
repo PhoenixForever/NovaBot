@@ -166,6 +166,7 @@ def receive_message():
                             run_date=reminder_time,
                             args=[sender, user_message]
                         )
+                        print("Scheduled jobs:", scheduler.get_jobs())
 
                         reply_text = "✅ NovaBot has scheduled your reminder!"
                         print("Confirmation message:", reply_text)
