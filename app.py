@@ -39,7 +39,7 @@ def extract_reminder_time(user_message):
     return None
 
 
-scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
+scheduler = BackgroundScheduler(timezone="UTC")
 
 def send_reminder(phone_number, reminder_text):
     print("🚨 REMINDER FUNCTION STARTED!", flush=True)
