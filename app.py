@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import requests
 import json
 
-import ollama
+from groq import Groq
 
 load_dotenv()
 
@@ -44,10 +44,13 @@ def send_reminder(phone_number, reminder_text):
 
 processed_message_ids = set()
 
+
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
 def get_ai_response(user_message):
     try:
-        response = ollama.chat(
-            model="llama3.2:3b",
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             messages=[
                 {
                     "role": "user",
@@ -56,11 +59,12 @@ def get_ai_response(user_message):
             ]
         )
 
-        return response["message"]["content"]
+        return response.choices[0].message.content
 
     except Exception as e:
         print("AI error:", e)
         return "Sorry, I'm having trouble answering right now. Please try again."
+
 
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN")
 
