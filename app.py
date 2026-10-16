@@ -22,6 +22,8 @@ logging.basicConfig(
 )
 
 logging.getLogger("apscheduler").setLevel(logging.DEBUG)
+logging.getLogger("apscheduler.scheduler").setLevel(logging.DEBUG)
+logging.getLogger("apscheduler.executors").setLevel(logging.DEBUG)
 
 
 load_dotenv()
