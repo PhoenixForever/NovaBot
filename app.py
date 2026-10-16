@@ -45,6 +45,7 @@ scheduler = BackgroundScheduler(timezone="UTC")
 print("APScheduler version:", apscheduler.__version__, flush=True)
 
 def send_reminder(phone_number, reminder_text):
+    print("Scheduler thread alive:", scheduler._thread.is_alive(), flush=True)
     print("🚨 REMINDER FUNCTION STARTED!", flush=True)
     print("Sending reminder to:", phone_number, flush=True)
     print("Reminder:", reminder_text, flush=True)
