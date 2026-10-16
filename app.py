@@ -15,7 +15,12 @@ from groq import Groq
 
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    force=True
+)
+
 logging.getLogger("apscheduler").setLevel(logging.DEBUG)
 
 
@@ -230,7 +235,6 @@ def receive_message():
 
 
 print("Scheduler object:", scheduler, flush=True)
-print("Scheduler state before startup:", scheduler.state, flush=True)
 
 if not scheduler.running:
     print("Scheduler state before startup:", scheduler.state, flush=True)
