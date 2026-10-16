@@ -208,6 +208,7 @@ def receive_message():
 
                         print("Reminder job ID:", job.id, flush=True)
                         print("Reminder next run:", job.next_run_time, flush=True)
+                        print("Scheduler thread alive after adding job:", scheduler._thread.is_alive() if scheduler._thread else None, flush=True)
                         print("Scheduler running:", scheduler.running, flush=True)
                         print("Scheduler thread alive:", scheduler._thread.is_alive(), flush=True)
                         print("Scheduler state:", scheduler.state, flush=True)
