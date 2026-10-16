@@ -47,6 +47,15 @@ def extract_reminder_time(user_message):
 
 
 scheduler = BackgroundScheduler(timezone="UTC")
+def scheduler_event_listener(event):
+    print(
+        "SCHEDULER EVENT:",
+        type(event).__name__,
+        getattr(event, "exception", None),
+        flush=True
+    )
+
+scheduler.add_listener(scheduler_event_listener)
 print("APScheduler version:", apscheduler.__version__, flush=True)
 
 def send_reminder(phone_number, reminder_text):
