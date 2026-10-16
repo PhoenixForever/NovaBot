@@ -233,9 +233,10 @@ print("Scheduler object:", scheduler, flush=True)
 print("Scheduler state before startup:", scheduler.state, flush=True)
 
 if not scheduler.running:
+    print("Scheduler state before startup:", scheduler.state, flush=True)
+    print("Scheduler timezone:", scheduler.timezone, flush=True)
     scheduler.start()
     print("NovaBot reminder scheduler is running!", flush=True)
-    print("Scheduler state after startup:", scheduler.state, flush=True)
 
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
