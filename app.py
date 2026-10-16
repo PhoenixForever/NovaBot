@@ -197,6 +197,8 @@ def receive_message():
 
                         print("Reminder job ID:", job.id, flush=True)
                         print("Reminder next run:", job.next_run_time, flush=True)
+                        print("Scheduler running:", scheduler.running, flush=True)
+                        print("Scheduler thread alive:", scheduler._thread.is_alive(), flush=True)
 
                         reply_text = (
                             "✅ NovaBot has scheduled your reminder!"
@@ -237,8 +239,6 @@ def receive_message():
 print("Scheduler object:", scheduler, flush=True)
 
 if not scheduler.running:
-    print("Scheduler state before startup:", scheduler.state, flush=True)
-    print("Scheduler timezone:", scheduler.timezone, flush=True)
     scheduler.start()
     print("NovaBot reminder scheduler is running!", flush=True)
 
