@@ -253,17 +253,10 @@ def receive_message():
 
 print("Scheduler object:", scheduler, flush=True)
 
-if not scheduler.running or not scheduler._thread.is_alive():
-    print("Starting or restarting scheduler...", flush=True)
+if not scheduler.running:
     scheduler.start()
-    print(
-        "Scheduler started. Thread alive:",
-        scheduler._thread.is_alive(),
-        flush=True
-    )
 
 print("Scheduler running:", scheduler.running, flush=True)
-print("Scheduler state:", scheduler.state, flush=True)
 print(
     "Scheduler thread alive:",
     scheduler._thread.is_alive() if scheduler._thread else False,
