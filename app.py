@@ -228,11 +228,13 @@ def receive_message():
     return "EVENT_RECEIVED", 200
 
 
-
+print("Scheduler object:", scheduler, flush=True)
+print("Scheduler state before startup:", scheduler.state, flush=True)
 
 if not scheduler.running:
     scheduler.start()
-    print("NovaBot reminder scheduler is running!")
+    print("NovaBot reminder scheduler is running!", flush=True)
+    print("Scheduler state after startup:", scheduler.state, flush=True)
 
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
