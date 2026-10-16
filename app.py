@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 import requests
 import json
+import apscheduler
 
 from groq import Groq
 
@@ -16,6 +17,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("apscheduler").setLevel(logging.DEBUG)
+
 
 load_dotenv()
 
@@ -40,6 +42,7 @@ def extract_reminder_time(user_message):
 
 
 scheduler = BackgroundScheduler(timezone="UTC")
+print("APScheduler version:", apscheduler.__version__, flush=True)
 
 def send_reminder(phone_number, reminder_text):
     print("🚨 REMINDER FUNCTION STARTED!", flush=True)
@@ -135,11 +138,13 @@ def verify_webhook():
 
 @app.route("/webhook", methods=["POST"])
 def receive_message():
-
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
 
     try:
-        messages = data["entry"][0]["changes"][0]["value"].get("messages", [])
+        messages = (
+            data["entry"][0]["changes"][0]["value"]
+            .get("messages", [])
+        )
 
         for message in messages:
             message_id = message.get("id")
@@ -148,69 +153,80 @@ def receive_message():
                 continue
 
             if message_id in processed_message_ids:
-                print("Duplicate message ignored:", message_id)
+                print("Duplicate message ignored:", message_id, flush=True)
                 continue
 
-            if message.get("type") == "text":
-                processed_message_ids.add(message_id)
-                user_message = message["text"]["body"]
+            # Process text messages only
+            if message.get("type") != "text":
+                continue
 
-                print("Message received from WhatsApp:")
-                print(user_message)
-                
-                
+            processed_message_ids.add(message_id)
+
+            user_message = message["text"]["body"]
+            sender = message.get("from")
+
+            print("Message received from WhatsApp:", flush=True)
+            print(user_message, flush=True)
+
+            if not sender:
+                print("Sender number not found.", flush=True)
+                continue
+
+            # Handle reminder requests
             if is_reminder_request(user_message):
-                print("Reminder request detected!")
+                print("Reminder request detected!", flush=True)
 
                 reminder_time = extract_reminder_time(user_message)
-                print("Extracted reminder time:", reminder_time)
+                print("Extracted reminder time:", reminder_time, flush=True)
 
-                
                 if reminder_time:
-                    sender = message.get("from")
-
-                    if sender:
-                        scheduler.add_job(
+                    try:
+                        job = scheduler.add_job(
                             send_reminder,
-                            "date",
+                            trigger="date",
                             run_date=reminder_time,
-                            args=[sender, user_message]
+                            args=[sender, user_message],
+                            misfire_grace_time=300
                         )
-                        
-                        print("Scheduled jobs:", scheduler.get_jobs(), flush=True)
-                        print("Scheduler running:", scheduler.running, flush=True)
-                        print("Server time:", datetime.now(), flush=True)
 
-                        for job in scheduler.get_jobs():
-                            print("Job ID:", job.id, flush=True)
-                            print("Next run time:", job.next_run_time, flush=True)
+                        print("Reminder job ID:", job.id, flush=True)
+                        print("Reminder next run:", job.next_run_time, flush=True)
 
-                        print("Scheduler timezone:", scheduler.timezone, flush=True)
+                        reply_text = (
+                            "✅ NovaBot has scheduled your reminder!"
+                        )
 
-
-                        reply_text = "✅ NovaBot has scheduled your reminder!"
-                        print("Confirmation message:", reply_text)
-                    else:
-                        reply_text = "Sorry, I couldn't identify your WhatsApp number."
-
+                    except Exception as e:
+                        print("Scheduling error:", repr(e), flush=True)
+                        reply_text = (
+                            "Sorry, I couldn't schedule that reminder."
+                        )
                 else:
-                    reply_text = "Please specify the time, for example: Remind me to study DSA in 2 minutes."
+                    reply_text = (
+                        "Please specify the time, for example: "
+                        "Remind me to study DSA in 2 minutes."
+                    )
+
+            # Handle ordinary AI questions
             else:
                 reply_text = get_ai_response(user_message)
 
+            # Send exactly one response for this incoming message
+            try:
+                response = send_whatsapp_message(sender, reply_text)
+                print(
+                    "Reply HTTP status:",
+                    response.status_code,
+                    flush=True
+                )
+            except Exception as e:
+                print("WhatsApp reply error:", repr(e), flush=True)
 
-                sender = message.get("from")
-
-                if sender:
-                    send_whatsapp_message(sender, reply_text)
-                    print("Confirmation send function completed.")
-
-                
-
-    except (KeyError, IndexError, TypeError):
-        print("No message found in this webhook event.")
+    except (KeyError, IndexError, TypeError) as e:
+        print("Webhook payload error:", repr(e), flush=True)
 
     return "EVENT_RECEIVED", 200
+
 
 
 
