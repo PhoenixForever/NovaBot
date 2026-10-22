@@ -198,6 +198,22 @@ def receive_message():
 
                 if reminder_time:
                     try:
+                        print("=== SCHEDULER DIAGNOSTIC ===", flush=True)
+                        print("Scheduler running:", scheduler.running, flush=True)
+                        print("Scheduler state:", scheduler.state, flush=True)
+                        print("Scheduler object ID:", id(scheduler), flush=True)
+                        print(
+                            "Scheduler thread:",
+                            scheduler._thread,
+                            flush=True
+                        )
+                        print(
+                            "Thread alive:",
+                            scheduler._thread.is_alive() if scheduler._thread else False,
+                            flush=True
+                        )
+                        print("============================", flush=True)
+                        
                         job = scheduler.add_job(
                             send_reminder,
                             trigger="date",
