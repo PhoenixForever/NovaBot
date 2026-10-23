@@ -2,6 +2,6 @@ Flask
 gunicorn
 python-dotenv
 requests
-ollama
 APScheduler
 groq
+mysql-connector-python

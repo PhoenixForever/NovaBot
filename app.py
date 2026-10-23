@@ -15,6 +15,9 @@ from groq import Groq
 
 import logging
 
+import mysql.connector
+import secrets
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -35,6 +38,9 @@ def is_reminder_request(user_message):
 
 import re
 
+
+from datetime import datetime, timedelta, timezone
+
 def extract_reminder_time(user_message):
     match = re.search(
         r"in (\d+) minutes?",
@@ -43,7 +49,7 @@ def extract_reminder_time(user_message):
 
     if match:
         minutes = int(match.group(1))
-        return datetime.now() + timedelta(minutes=minutes)
+        return datetime.now(timezone.utc) + timedelta(minutes=minutes)
 
     return None
 
@@ -196,49 +202,57 @@ def receive_message():
                 reminder_time = extract_reminder_time(user_message)
                 print("Extracted reminder time:", reminder_time, flush=True)
 
+               
                 if reminder_time:
+                    connection = None
+                    cursor = None
+
                     try:
-                        print("=== SCHEDULER DIAGNOSTIC ===", flush=True)
-                        print("Scheduler running:", scheduler.running, flush=True)
-                        print("Scheduler state:", scheduler.state, flush=True)
-                        print("Scheduler object ID:", id(scheduler), flush=True)
-                        print(
-                            "Scheduler thread:",
-                            scheduler._thread,
-                            flush=True
-                        )
-                        print(
-                            "Thread alive:",
-                            scheduler._thread.is_alive() if scheduler._thread else False,
-                            flush=True
-                        )
-                        print("============================", flush=True)
-                        
-                        job = scheduler.add_job(
-                            send_reminder,
-                            trigger="date",
-                            run_date=reminder_time,
-                            args=[sender, user_message],
-                            misfire_grace_time=300
+                        connection = mysql.connector.connect(
+                            host=os.getenv("DB_HOST"),
+                            port=int(os.getenv("DB_PORT", "24379")),
+                            database=os.getenv("DB_NAME"),
+                            user=os.getenv("DB_USER"),
+                            password=os.getenv("DB_PASSWORD"),
+                            ssl_disabled=False,
+                            connection_timeout=15,
                         )
 
-                        print("Reminder job ID:", job.id, flush=True)
-                        print("Reminder next run:", job.next_run_time, flush=True)
-                        print("Scheduler thread alive after adding job:", scheduler._thread.is_alive() if scheduler._thread else None, flush=True)
-                        print("Scheduler running:", scheduler.running, flush=True)
-                        print("Scheduler thread alive:", scheduler._thread.is_alive(), flush=True)
-                        print("Scheduler state:", scheduler.state, flush=True)
-                        print("Scheduler paused:", scheduler.state == 2, flush=True)
+                        cursor = connection.cursor()
 
-                        reply_text = (
-                            "✅ NovaBot has scheduled your reminder!"
+                        cursor.execute(
+                            """
+                            INSERT INTO reminders
+                                (phone_number, reminder_text, scheduled_at, status)
+                            VALUES (%s, %s, %s, 'pending')
+                            """,
+                            (
+                                sender,
+                                user_message,
+                                reminder_time.replace(tzinfo=None),
+                            ),
                         )
+
+                        connection.commit()
+
+                        print(
+                            "Reminder saved to MySQL. ID:",
+                            cursor.lastrowid,
+                            flush=True,
+                        )
+
+                        reply_text = "✅ NovaBot has saved your reminder!"
 
                     except Exception as e:
-                        print("Scheduling error:", repr(e), flush=True)
-                        reply_text = (
-                            "Sorry, I couldn't schedule that reminder."
-                        )
+                        print("Database scheduling error:", repr(e), flush=True)
+                        reply_text = "Sorry, I couldn't save that reminder."
+
+                    finally:
+                        if cursor is not None:
+                            cursor.close()
+                        if connection is not None and connection.is_connected():
+                            connection.close()
+
                 else:
                     reply_text = (
                         "Please specify the time, for example: "
@@ -278,6 +292,142 @@ print(
     scheduler._thread.is_alive() if scheduler._thread else False,
     flush=True
 )
+
+@app.route("/internal/cron-health", methods=["GET"])
+def cron_health_endpoint():
+    expected_secret = os.getenv("REMINDER_CRON_SECRET")
+    provided_secret = request.headers.get("X-Cron-Secret", "")
+
+    if not expected_secret or not secrets.compare_digest(
+        provided_secret, expected_secret
+    ):
+        return {"error": "Unauthorized"}, 401
+
+    return {"success": True, "message": "Cron authentication works"}, 200
+
+@app.route("/internal/process-reminders", methods=["POST"])
+def process_reminders_endpoint():
+    # Protect this endpoint with our secret key.
+    expected_secret = os.getenv("REMINDER_CRON_SECRET")
+    provided_secret = request.headers.get("X-Cron-Secret", "")
+
+    if not expected_secret or not secrets.compare_digest(
+        provided_secret, expected_secret
+    ):
+        return {"error": "Unauthorized"}, 401
+
+    connection = None
+    cursor = None
+
+    try:
+        connection = mysql.connector.connect(
+            host=os.getenv("DB_HOST"),
+            port=int(os.getenv("DB_PORT", "24379")),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            ssl_disabled=False,
+            connection_timeout=15,
+        )
+
+        connection.start_transaction()
+        cursor = connection.cursor(dictionary=True)
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        cursor.execute("""
+            SELECT id, phone_number, reminder_text
+            FROM reminders
+            WHERE status = 'pending'
+              AND scheduled_at <= %s
+            ORDER BY scheduled_at ASC
+            LIMIT 20
+            FOR UPDATE
+        """, (now,))
+
+        reminders = cursor.fetchall()
+
+        for reminder in reminders:
+            cursor.execute("""
+                UPDATE reminders
+                SET status = 'processing'
+                WHERE id = %s AND status = 'pending'
+            """, (reminder["id"],))
+
+        connection.commit()
+
+        sent = 0
+        failed = 0
+
+        for reminder in reminders:
+            try:
+                response = send_whatsapp_message(
+                    reminder["phone_number"],
+                    "🔔 NovaBot Reminder: "
+                    + reminder["reminder_text"],
+                )
+                response.raise_for_status()
+
+                new_status = "sent"
+                sent += 1
+
+            except Exception:
+                logging.exception(
+                    "Reminder delivery failed: %s",
+                    reminder["id"],
+                )
+                new_status = "failed"
+                failed += 1
+
+            update_connection = None
+            update_cursor = None
+
+            try:
+                update_connection = mysql.connector.connect(
+                    host=os.getenv("DB_HOST"),
+                    port=int(os.getenv("DB_PORT", "24379")),
+                    database=os.getenv("DB_NAME"),
+                    user=os.getenv("DB_USER"),
+                    password=os.getenv("DB_PASSWORD"),
+                    ssl_disabled=False,
+                    connection_timeout=15,
+                )
+
+                update_cursor = update_connection.cursor()
+                update_cursor.execute(
+                    "UPDATE reminders SET status = %s WHERE id = %s",
+                    (new_status, reminder["id"]),
+                )
+                update_connection.commit()
+
+            finally:
+                if update_cursor is not None:
+                    update_cursor.close()
+                if (
+                    update_connection is not None
+                    and update_connection.is_connected()
+                ):
+                    update_connection.close()
+
+        return {
+            "success": True,
+            "checked": len(reminders),
+            "sent": sent,
+            "failed": failed,
+        }, 200
+
+    except Exception:
+        if connection is not None and connection.is_connected():
+            connection.rollback()
+
+        logging.exception("Reminder endpoint failed")
+        return {"error": "Reminder processing failed"}, 500
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if connection is not None and connection.is_connected():
+            connection.close()
 
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
