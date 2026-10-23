@@ -429,5 +429,14 @@ def process_reminders_endpoint():
         if connection is not None and connection.is_connected():
             connection.close()
 
+@app.route("/debug-routes", methods=["GET"])
+def debug_routes():
+    return {
+        "app_file": os.path.abspath(__file__),
+        "routes": sorted(
+            str(rule) for rule in app.url_map.iter_rules()
+        )
+    }, 200
+
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
