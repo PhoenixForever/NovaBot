@@ -18,6 +18,9 @@ import logging
 import mysql.connector
 import secrets
 
+import fitz
+import io
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -139,6 +142,101 @@ def send_whatsapp_message(to, message_text):
 
     return response
 
+#WhatsApp media download function
+def download_whatsapp_media(media_id):
+    """Download a media file from WhatsApp using its media ID."""
+
+    # Step 1: Ask WhatsApp for the media download URL
+    url = f"https://graph.facebook.com/v26.0/{media_id}"
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=20
+    )
+    response.raise_for_status()
+
+    media_url = response.json().get("url")
+
+    if not media_url:
+        raise ValueError("WhatsApp did not return a media URL.")
+
+    # Step 2: Download the actual file
+    media_response = requests.get(
+        media_url,
+        headers=headers,
+        timeout=60
+    )
+    media_response.raise_for_status()
+
+    return media_response.content, media_response.headers.get(
+        "Content-Type", "application/octet-stream"
+    )
+
+#text extraction from PDF function
+def extract_pdf_text(file_bytes):
+    """Extract readable text from a PDF stored in memory."""
+
+    with fitz.open(stream=file_bytes, filetype="pdf") as pdf:
+        if len(pdf) == 0:
+            raise ValueError("The PDF has no pages.")
+
+        text_parts = []
+
+        for page in pdf:
+            page_text = page.get_text()
+            if page_text.strip():
+                text_parts.append(page_text)
+
+    extracted_text = "\n\n".join(text_parts).strip()
+
+    if not extracted_text:
+        raise ValueError(
+            "No readable text found. The PDF may contain scanned pages."
+        )
+
+    return extracted_text
+
+#PDF summarization function
+def summarize_pdf_text(pdf_text):
+    """Generate a concise summary of extracted PDF text."""
+
+    prompt = f"""
+You are NovaBot, a helpful AI assistant.
+
+Summarize the following PDF in clear, simple language.
+
+Include:
+1. The main topic and purpose
+2. The most important points
+3. Important facts, dates, or figures
+4. Key conclusions
+5. Action items, if any
+
+Use headings and bullet points.
+Do not invent information that is not in the document.
+
+PDF TEXT:
+{pdf_text[:12000]}
+"""
+
+    response = groq_client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0.3,
+        max_tokens=1200
+    )
+
+    return response.choices[0].message.content.strip()
 
 @app.route("/")
 def home():
@@ -156,8 +254,6 @@ def verify_webhook():
         return challenge, 200
 
     return "Verification failed", 403
-
-
 
 @app.route("/webhook", methods=["POST"])
 def receive_message():
@@ -179,24 +275,56 @@ def receive_message():
                 print("Duplicate message ignored:", message_id, flush=True)
                 continue
 
-            # Process text messages only
-            if message.get("type") != "text":
+            
+            # Identify supported incoming message types
+            message_type = message.get("type")
+
+            if message_type not in ("text", "image", "document"):
+                print("Unsupported message type:", message_type, flush=True)
                 continue
 
             processed_message_ids.add(message_id)
-
-            user_message = message["text"]["body"]
             sender = message.get("from")
-
-            print("Message received from WhatsApp:", flush=True)
-            print(user_message, flush=True)
 
             if not sender:
                 print("Sender number not found.", flush=True)
                 continue
 
-            # Handle reminder requests
-            if is_reminder_request(user_message):
+            
+            if message_type == "text":
+                user_message = message["text"]["body"]
+
+            elif message_type == "image":
+                media_id = message["image"].get("id")
+
+                try:
+                    file_bytes, content_type = download_whatsapp_media(media_id)
+
+                    print(
+                        f"Image downloaded successfully. "
+                        f"Size: {len(file_bytes)} bytes, "
+                        f"Type: {content_type}",
+                        flush=True
+                    )
+
+                    user_message = (
+                        "The user sent an image. "
+                        "Image downloading succeeded, but image analysis "
+                        "has not been implemented yet."
+                    )
+
+                except Exception as e:
+                    print("Image download error:", repr(e), flush=True)
+                    user_message = "The image could not be downloaded."
+
+            elif message_type == "document":
+                user_message = ""
+
+
+
+            
+            # Handle reminder requests only for text messages
+            if message_type == "text" and is_reminder_request(user_message):
                 print("Reminder request detected!", flush=True)
 
                 reminder_time = extract_reminder_time(user_message)
@@ -260,8 +388,57 @@ def receive_message():
                     )
 
             # Handle ordinary AI questions
-            else:
+            elif message_type == "text":
                 reply_text = get_ai_response(user_message)
+
+            elif message_type == "image":
+                reply_text = (
+                    "📷 I've received your image! "
+                    "Image analysis is coming soon."
+                )
+
+            
+            elif message_type == "document":
+                document = message.get("document", {})
+                filename = document.get("filename", "unknown.pdf")
+                mime_type = document.get("mime_type", "")
+
+                if not (
+                    filename.lower().endswith(".pdf")
+                    or mime_type == "application/pdf"
+                ):
+                    reply_text = "📄 Please send a PDF file so I can summarize it."
+
+                else:
+                    media_id = document.get("id")
+
+                    try:
+                        if not media_id:
+                            raise ValueError("PDF media ID is missing.")
+
+                        
+                        file_bytes, content_type = download_whatsapp_media(media_id)
+
+                        if not file_bytes.startswith(b"%PDF-"):
+                            raise ValueError("The downloaded file is not a valid PDF.")
+
+                        if len(file_bytes) > 10 * 1024 * 1024:
+                            raise ValueError(
+                                "The PDF is larger than NovaBot's 10 MB processing limit."
+                            )
+
+                        pdf_text = extract_pdf_text(file_bytes)
+                        reply_text = summarize_pdf_text(pdf_text)
+
+                        reply_text = "📄 *PDF Summary*\n\n" + reply_text
+
+                    except Exception as e:
+                        print("PDF summarization error:", repr(e), flush=True)
+                        reply_text = (
+                            "Sorry, I couldn't summarize this PDF. "
+                            "Please check that it contains readable text and try again."
+                        )
+
 
             # Send exactly one response for this incoming message
             try:
@@ -278,8 +455,6 @@ def receive_message():
         print("Webhook payload error:", repr(e), flush=True)
 
     return "EVENT_RECEIVED", 200
-
-
 
 print("Scheduler object:", scheduler, flush=True)
 
