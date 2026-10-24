@@ -414,6 +414,7 @@ def receive_message():
             #Image understanding & response
             elif message_type == "image":
                 image = message.get("image", {})
+                image_question = image.get("caption", "").strip()
                 media_id = image.get("id")
 
                 try:
@@ -443,10 +444,13 @@ def receive_message():
                     if content_type == "image/jpg":
                         content_type = "image/jpeg"
 
+                    if not image_question:
+                        image_question = "Describe this image and identify its important details."
+
                     answer = analyze_image(
                         file_bytes,
                         content_type,
-                        question="Describe this image and identify its important details."
+                        question=image_question
                     )
 
                     reply_text = "🖼️ *Image Analysis*\n\n" + answer
