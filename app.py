@@ -88,6 +88,24 @@ processed_message_ids = set()
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+
+def transcribe_voice_note(audio_bytes, filename="voice.ogg"):
+    """Convert a WhatsApp voice note into text using Groq."""
+
+    try:
+        transcription = groq_client.audio.transcriptions.create(
+            file=(filename, audio_bytes),
+            model="whisper-large-v3-turbo",
+            response_format="text"
+        )
+
+        return str(transcription).strip()
+
+    except Exception as e:
+        print("Voice transcription error:", repr(e), flush=True)
+        raise
+
+
 def get_ai_response(user_message):
     try:
         response = groq_client.chat.completions.create(
@@ -319,7 +337,7 @@ def receive_message():
             # Identify supported incoming message types
             message_type = message.get("type")
 
-            if message_type not in ("text", "image", "document"):
+            if message_type not in ("text", "image", "document", "audio"):
                 print("Unsupported message type:", message_type, flush=True)
                 continue
 
@@ -340,6 +358,9 @@ def receive_message():
 
 
             elif message_type == "document":
+                user_message = ""
+
+            elif message_type == "audio":
                 user_message = ""
 
           
@@ -410,6 +431,47 @@ def receive_message():
             # Handle ordinary AI questions
             elif message_type == "text":
                 reply_text = get_ai_response(user_message)
+
+            
+            # Voice note understanding & response
+            elif message_type == "audio":
+                audio = message.get("audio", {})
+                media_id = audio.get("id")
+                mime_type = audio.get("mime_type", "audio/ogg")
+                extension = "ogg"
+
+                if "mpeg" in mime_type:
+                    extension = "mp3"
+                elif "mp4" in mime_type:
+                    extension = "m4a"
+                elif "wav" in mime_type:
+                    extension = "wav"
+
+                try:
+                    if not media_id:
+                        raise ValueError("Audio media ID is missing.")
+
+                    audio_bytes, content_type = download_whatsapp_media(media_id)
+
+                    if not audio_bytes:
+                        raise ValueError("Downloaded audio file is empty.")
+
+                    transcript = transcribe_voice_note(
+                        audio_bytes,
+                        filename=f"voice.{extension}"
+                    )
+
+                    if not transcript:
+                        reply_text = "Sorry, I couldn't understand that voice note. Please try again."
+                    else:
+                        reply_text = get_ai_response(transcript)
+
+                except Exception as e:
+                    print("Voice note processing error:", repr(e), flush=True)
+                    reply_text = (
+                        "Sorry, I couldn't process that voice note. "
+                        "Please try sending it again."
+                    )
 
             #Image understanding & response
             elif message_type == "image":
