@@ -21,6 +21,8 @@ import secrets
 import fitz
 import io
 
+import base64
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -238,6 +240,44 @@ PDF TEXT:
 
     return response.choices[0].message.content.strip()
 
+#Image analysis function
+def analyze_image(image_bytes, content_type, question="Describe this image in detail."):
+    """Analyze an image using Groq's vision model."""
+
+    if content_type not in ("image/jpeg", "image/png", "image/webp","image/jpg"):
+        raise ValueError("Unsupported image format.")
+
+    if len(image_bytes) > 20 * 1024 * 1024:
+        raise ValueError("The image exceeds the 20 MB limit.")
+
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    response = groq_client.chat.completions.create(
+        model="qwen/qwen3.8-27b",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": question
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{content_type};base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        temperature=0.3,
+        max_tokens=1000
+    )
+
+    return response.choices[0].message.content.strip()
+
+
 @app.route("/")
 def home():
     return "NovaBot is running!"
@@ -294,35 +334,15 @@ def receive_message():
             if message_type == "text":
                 user_message = message["text"]["body"]
 
+            
             elif message_type == "image":
-                media_id = message["image"].get("id")
+                user_message = ""
 
-                try:
-                    file_bytes, content_type = download_whatsapp_media(media_id)
-
-                    print(
-                        f"Image downloaded successfully. "
-                        f"Size: {len(file_bytes)} bytes, "
-                        f"Type: {content_type}",
-                        flush=True
-                    )
-
-                    user_message = (
-                        "The user sent an image. "
-                        "Image downloading succeeded, but image analysis "
-                        "has not been implemented yet."
-                    )
-
-                except Exception as e:
-                    print("Image download error:", repr(e), flush=True)
-                    user_message = "The image could not be downloaded."
 
             elif message_type == "document":
                 user_message = ""
 
-
-
-            
+          
             # Handle reminder requests only for text messages
             if message_type == "text" and is_reminder_request(user_message):
                 print("Reminder request detected!", flush=True)
@@ -391,13 +411,55 @@ def receive_message():
             elif message_type == "text":
                 reply_text = get_ai_response(user_message)
 
+            #Image understanding & response
             elif message_type == "image":
-                reply_text = (
-                    "📷 I've received your image! "
-                    "Image analysis is coming soon."
-                )
+                image = message.get("image", {})
+                media_id = image.get("id")
 
-            
+                try:
+                    if not media_id:
+                        raise ValueError("Image media ID is missing.")
+
+                    file_bytes, content_type = download_whatsapp_media(media_id)
+
+                    # Use the actual downloaded content type when available.
+                    if content_type:
+                        content_type = content_type.split(";")[0].strip().lower()
+
+                    if content_type not in (
+                        "image/jpeg",
+                        "image/png",
+                        "image/webp",
+                        "image/jpg"
+                    ):
+                        content_type = (
+                            image.get("mime_type", "")
+                            .split(";")[0]
+                            .strip()
+                            .lower()
+                        )
+
+                    # Normalize JPG to the standard JPEG MIME type
+                    if content_type == "image/jpg":
+                        content_type = "image/jpeg"
+
+                    answer = analyze_image(
+                        file_bytes,
+                        content_type,
+                        question="Describe this image and identify its important details."
+                    )
+
+                    reply_text = "🖼️ *Image Analysis*\n\n" + answer
+
+                except Exception as e:
+                    print("Image analysis error:", repr(e), flush=True)
+                    reply_text = (
+                        "Sorry, I couldn't analyze this image. "
+                        "Please try sending a JPEG, PNG, JPG or WebP image."
+                    )
+
+
+            #PDF understanding & response
             elif message_type == "document":
                 document = message.get("document", {})
                 filename = document.get("filename", "unknown.pdf")
