@@ -854,6 +854,7 @@ def process_reminders_endpoint():
 
         
             try:
+                logging.info("DEBUG: Reached scheduled-message processing")
                 scheduled_result = process_due_scheduled_messages()
             except Exception as e:
                 logging.exception("Scheduled message call failed")
