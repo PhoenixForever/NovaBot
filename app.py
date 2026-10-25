@@ -751,6 +751,7 @@ def cron_health_endpoint():
 
 def process_reminders_endpoint():
     # Protect this endpoint with our secret key.
+    logging.error("DIAGNOSTIC: process_reminders_endpoint entered")
     expected_secret = os.getenv("REMINDER_CRON_SECRET")
     provided_secret = request.headers.get("X-Cron-Secret", "")
 
