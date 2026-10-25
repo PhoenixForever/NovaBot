@@ -20,7 +20,7 @@ import secrets
 
 import fitz
 import io
-
+from zoneinfo import ZoneInfo
 import base64
 
 logging.basicConfig(
@@ -313,6 +313,73 @@ def verify_webhook():
 
     return "Verification failed", 403
 
+def parse_scheduled_message(user_message):
+    pattern = (
+        r"schedule a message to (.+?) at "
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) "
+        r"saying (.+)"
+    )
+
+    match = re.match(pattern, user_message.strip(), re.IGNORECASE)
+
+    if not match:
+        return None
+
+    contact_name = match.group(1).strip()
+    time_text = match.group(2).strip()
+    message_text = match.group(3).strip()
+
+    try:
+        scheduled_local = datetime.strptime(
+            time_text, "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+
+        scheduled_utc = scheduled_local.astimezone(
+            ZoneInfo("UTC")
+        ).replace(tzinfo=None)
+
+        if scheduled_local <= datetime.now(ZoneInfo("Asia/Kolkata")):
+            return None
+
+    except ValueError:
+        return None
+
+    return contact_name, scheduled_utc, message_text
+
+
+def find_contact_by_name(contact_name):
+    connection = None
+    cursor = None
+
+    try:
+        connection = mysql.connector.connect(
+            host=os.getenv("DB_HOST"),
+            port=int(os.getenv("DB_PORT", "24379")),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            ssl_disabled=False,
+            connection_timeout=15,
+        )
+
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT contact_name, phone_number
+            FROM contacts
+            WHERE LOWER(contact_name) = LOWER(%s)
+            """,
+            (contact_name.strip(),),
+        )
+
+        return cursor.fetchone()
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if connection is not None and connection.is_connected():
+            connection.close()
+
 @app.route("/webhook", methods=["POST"])
 def receive_message():
     data = request.get_json(silent=True) or {}
@@ -428,9 +495,81 @@ def receive_message():
                         "Remind me to study DSA in 2 minutes."
                     )
 
+            
+            # Handle scheduled WhatsApp messages
+            elif message_type == "text" and user_message.lower().startswith(
+                "schedule a message to "
+            ):
+                parsed = parse_scheduled_message(user_message)
+
+                if not parsed:
+                    reply_text = (
+                        "Please use this format:\n"
+                        "Schedule a message to Rahul at 2026-10-26 09:00 "
+                        "saying Good morning."
+                    )
+                else:
+                    contact_name, scheduled_at, message_text = parsed
+
+                    try:
+                        contact = find_contact_by_name(contact_name)
+
+                        if not contact:
+                            reply_text = (
+                                f"I couldn't find '{contact_name}' in your saved "
+                                "contacts. Add the contact first and try again."
+                            )
+                        else:
+                            recipient_name, recipient_phone = contact
+
+                            connection = mysql.connector.connect(
+                                host=os.getenv("DB_HOST"),
+                                port=int(os.getenv("DB_PORT", "24379")),
+                                database=os.getenv("DB_NAME"),
+                                user=os.getenv("DB_USER"),
+                                password=os.getenv("DB_PASSWORD"),
+                                ssl_disabled=False,
+                                connection_timeout=15,
+                            )
+
+                            cursor = connection.cursor()
+                            try:
+                                cursor.execute(
+                                    """
+                                    INSERT INTO scheduled_messages
+                                        (sender_phone, recipient_phone, message_text,
+                                        scheduled_at, status)
+                                    VALUES (%s, %s, %s, %s, 'pending')
+                                    """,
+                                    (
+                                        sender,
+                                        recipient_phone,
+                                        message_text,
+                                        scheduled_at,
+                                    ),
+                                )
+                                connection.commit()
+                            finally:
+                                cursor.close()
+                                connection.close()
+
+                            reply_text = (
+                                f"✅ Message scheduled for {recipient_name} "
+                                f"at {scheduled_at.strftime('%Y-%m-%d %H:%M')} UTC.\n"
+                                f"Message: {message_text}"
+                            )
+
+                    except Exception as e:
+                        print("Scheduled message error:", repr(e), flush=True)
+                        reply_text = (
+                            "Sorry, I couldn't schedule that message. "
+                            "Please try again."
+                        )
+
             # Handle ordinary AI questions
             elif message_type == "text":
                 reply_text = get_ai_response(user_message)
+
 
             
             # Voice note understanding & response
@@ -609,6 +748,7 @@ def cron_health_endpoint():
     return {"success": True, "message": "Cron authentication works"}, 200
 
 @app.route("/internal/process-reminders", methods=["POST"])
+
 def process_reminders_endpoint():
     # Protect this endpoint with our secret key.
     expected_secret = os.getenv("REMINDER_CRON_SECRET")
@@ -712,12 +852,17 @@ def process_reminders_endpoint():
                 ):
                     update_connection.close()
 
-        return {
-            "success": True,
-            "checked": len(reminders),
-            "sent": sent,
-            "failed": failed,
-        }, 200
+        
+            scheduled_result = process_due_scheduled_messages()
+
+            return {
+                "success": True,
+                "checked": len(reminders),
+                "sent": sent,
+                "failed": failed,
+                "scheduled_messages": scheduled_result,
+            }, 200
+
 
     except Exception:
         if connection is not None and connection.is_connected():
@@ -725,6 +870,133 @@ def process_reminders_endpoint():
 
         logging.exception("Reminder endpoint failed")
         return {"error": "Reminder processing failed"}, 500
+
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if connection is not None and connection.is_connected():
+            connection.close()
+
+def process_due_scheduled_messages():
+    connection = None
+    cursor = None
+    sent = 0
+    failed = 0
+
+    try:
+        connection = mysql.connector.connect(
+            host=os.getenv("DB_HOST"),
+            port=int(os.getenv("DB_PORT", "24379")),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            ssl_disabled=False,
+            connection_timeout=15,
+        )
+
+        connection.start_transaction()
+        cursor = connection.cursor(dictionary=True)
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        cursor.execute(
+            """
+            SELECT id, recipient_phone, message_text
+            FROM scheduled_messages
+            WHERE status = 'pending'
+              AND scheduled_at <= %s
+            ORDER BY scheduled_at ASC
+            LIMIT 20
+            FOR UPDATE
+            """,
+            (now,),
+        )
+
+        messages = cursor.fetchall()
+
+        for item in messages:
+            cursor.execute(
+                """
+                UPDATE scheduled_messages
+                SET status = 'processing'
+                WHERE id = %s AND status = 'pending'
+                """,
+                (item["id"],),
+            )
+
+        connection.commit()
+
+        for item in messages:
+            message_id = item["id"]
+            new_status = "failed"
+            update_connection = None
+            update_cursor = None
+
+            try:
+                response = send_whatsapp_message(
+                    item["recipient_phone"],
+                    item["message_text"],
+                )
+                response.raise_for_status()
+                new_status = "sent"
+                sent += 1
+
+            except Exception:
+                failed += 1
+                logging.exception(
+                    "Scheduled message delivery failed: %s",
+                    message_id,
+                )
+
+            finally:
+                try:
+                    update_connection = mysql.connector.connect(
+                        host=os.getenv("DB_HOST"),
+                        port=int(os.getenv("DB_PORT", "24379")),
+                        database=os.getenv("DB_NAME"),
+                        user=os.getenv("DB_USER"),
+                        password=os.getenv("DB_PASSWORD"),
+                        ssl_disabled=False,
+                        connection_timeout=15,
+                    )
+
+                    update_cursor = update_connection.cursor()
+                    update_cursor.execute(
+                        """
+                        UPDATE scheduled_messages
+                        SET status = %s,
+                            sent_at = CASE
+                                WHEN %s = 'sent' THEN UTC_TIMESTAMP()
+                                ELSE sent_at
+                            END
+                        WHERE id = %s
+                        """,
+                        (new_status, new_status, message_id),
+                    )
+                    update_connection.commit()
+
+                except Exception:
+                    logging.exception(
+                        "Could not update scheduled message status: %s",
+                        message_id,
+                    )
+
+                finally:
+                    if update_cursor is not None:
+                        update_cursor.close()
+                    if (
+                        update_connection is not None
+                        and update_connection.is_connected()
+                    ):
+                        update_connection.close()
+
+        return {"checked": len(messages), "sent": sent, "failed": failed}
+
+    except Exception:
+        if connection is not None and connection.is_connected():
+            connection.rollback()
+        logging.exception("Scheduled-message processing failed")
+        return {"checked": 0, "sent": sent, "failed": failed}
 
     finally:
         if cursor is not None:
