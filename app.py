@@ -789,8 +789,9 @@ def process_reminders_endpoint():
             LIMIT 20
             FOR UPDATE
         """, (now,))
-
+        logging.error("DIAGNOSTIC: before fetching reminders")
         reminders = cursor.fetchall()
+        logging.error("DIAGNOSTIC: reminders fetched: %s", len(reminders))
 
         for reminder in reminders:
             cursor.execute("""
