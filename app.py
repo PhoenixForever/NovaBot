@@ -869,10 +869,7 @@ def process_reminders_endpoint():
 
         return {
             "success": True,
-            "checked": len(reminders),
-            "sent": sent,
-            "failed": failed,
-            "scheduled_messages": scheduled_result,
+            "message": "Reminder check completed"
         }, 200
 
 
