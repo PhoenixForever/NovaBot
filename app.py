@@ -948,7 +948,15 @@ def process_due_scheduled_messages():
                     item["recipient_phone"],
                     item["message_text"],
                 )
-                response.raise_for_status()
+                if not response.ok:
+                    logging.error(
+                        "WhatsApp API error for scheduled message %s: HTTP %s - %s",
+                        message_id,
+                        response.status_code,
+                        response.text
+                    )
+                    response.raise_for_status()
+
                 new_status = "sent"
                 sent += 1
 
