@@ -773,6 +773,7 @@ def process_reminders_endpoint():
             ssl_disabled=False,
             connection_timeout=15,
         )
+        logging.error("DIAGNOSTIC: database connection established")
 
         connection.start_transaction()
         cursor = connection.cursor(dictionary=True)
