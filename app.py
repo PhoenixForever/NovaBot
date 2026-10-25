@@ -856,20 +856,25 @@ def process_reminders_endpoint():
                     update_connection.close()
 
         
-            try:
-                logging.info("DEBUG: Reached scheduled-message processing")
-                scheduled_result = process_due_scheduled_messages()
-            except Exception as e:
-                logging.exception("Scheduled message call failed")
-                scheduled_result = {"error": str(e)}
+            
+        # Process scheduled WhatsApp messages after processing reminders.
+        try:
+            logging.info("Starting scheduled-message processing")
+            scheduled_result = process_due_scheduled_messages()
+        except Exception:
+            logging.exception("Scheduled message call failed")
+            scheduled_result = {
+                "error": "Scheduled-message processing failed"
+            }
 
-            return {
-                "success": True,
-                "checked": len(reminders),
-                "sent": sent,
-                "failed": failed,
-                "scheduled_messages": scheduled_result,
-            }, 200
+        return {
+            "success": True,
+            "checked": len(reminders),
+            "sent": sent,
+            "failed": failed,
+            "scheduled_messages": scheduled_result,
+        }, 200
+
 
 
     except Exception as e:
