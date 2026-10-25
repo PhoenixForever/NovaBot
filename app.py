@@ -853,7 +853,11 @@ def process_reminders_endpoint():
                     update_connection.close()
 
         
-            scheduled_result = process_due_scheduled_messages()
+            try:
+                scheduled_result = process_due_scheduled_messages()
+            except Exception as e:
+                logging.exception("Scheduled message call failed")
+                scheduled_result = {"error": str(e)}
 
             return {
                 "success": True,
