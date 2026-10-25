@@ -881,6 +881,7 @@ def process_reminders_endpoint():
             cursor.close()
         if connection is not None and connection.is_connected():
             connection.close()
+    return {"error": "Reminder endpoint reached an unexpected exit"}, 500
 
 def process_due_scheduled_messages():
     connection = None
