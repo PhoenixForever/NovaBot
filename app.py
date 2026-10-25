@@ -870,11 +870,11 @@ def process_reminders_endpoint():
 
 
     except Exception as e:
-    if connection is not None and connection.is_connected():
-        connection.rollback()
+        if connection is not None and connection.is_connected():
+            connection.rollback()
 
-    logging.exception("Reminder endpoint failed: %s", e)
-    return {"error": str(e)}, 500
+        logging.exception("Reminder endpoint failed: %s", e)
+        return {"error": str(e)}, 500
 
     finally:
         if cursor is not None:
