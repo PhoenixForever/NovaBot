@@ -383,6 +383,20 @@ def find_contact_by_name(contact_name):
 @app.route("/webhook", methods=["POST"])
 def receive_message():
     data = request.get_json(silent=True) or {}
+    
+    for entry in data.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+
+            for status_update in value.get("statuses", []):
+                print(
+                    "WHATSAPP DELIVERY STATUS:",
+                    "message_id =", status_update.get("id"),
+                    "status =", status_update.get("status"),
+                    "errors =", status_update.get("errors"),
+                    flush=True
+                )
+
 
     try:
         messages = (
