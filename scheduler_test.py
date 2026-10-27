@@ -1,21 +1,25 @@
 
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta
+import time
 
-scheduler = BlockingScheduler()
+def test_reminder():
+    print("SUCCESS! Reminder executed at:", datetime.now(), flush=True)
 
-def my_reminder(message):
-    print("🔔 NovaBot Reminder:", message)
-    print("Time:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-reminder_time = datetime.now() + timedelta(seconds=30)
-
+scheduler = BackgroundScheduler()
 scheduler.add_job(
-    my_reminder,
-    "date",
-    run_date=reminder_time,
-    args=["Take a break and drink some water!"]
+    test_reminder,
+    trigger="date",
+    run_date=datetime.now() + timedelta(seconds=15)
 )
 
-print("Reminder scheduled for:", reminder_time.strftime("%H:%M:%S"))
 scheduler.start()
+print("Scheduler started at:", datetime.now(), flush=True)
+print("Waiting 15 seconds for the reminder...", flush=True)
+
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    scheduler.shutdown()
+    print("Scheduler stopped.", flush=True)

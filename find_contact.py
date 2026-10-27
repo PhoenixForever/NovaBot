@@ -36,6 +36,7 @@ try:
 
     if contact:
         print(f"Contact found: {contact[0]}")
+        print("Saved phone:", contact[1])
         print("Phone number is saved and ready to use.")
     else:
         print("Contact not found. Check the saved name.")
