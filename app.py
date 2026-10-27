@@ -162,6 +162,66 @@ def send_whatsapp_message(to, message_text):
 
     return response
 
+#Scheduled template message function
+
+def send_whatsapp_template(to, recipient_name, message_text):
+    """Send a WhatsApp-approved scheduled-message template."""
+
+    url = f"https://graph.facebook.com/v26.0/{PHONE_NUMBER_ID}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": "scheduled_message",
+            "language": {
+                "code": "en"
+            },
+            "components": [
+                {
+                    "type": "header",
+                    "parameters": [
+                        {
+                            "type": "text",
+                            "text": "Reminder"
+                        }
+                    ]
+                },
+                {
+                    "type": "body",
+                    "parameters": [
+                        {
+                            "type": "text",
+                            "text": recipient_name
+                        },
+                        {
+                            "type": "text",
+                            "text": message_text
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=20
+    )
+
+    print("WhatsApp template API status:", response.status_code, flush=True)
+    print("WhatsApp template API response:", response.text, flush=True)
+
+    return response
+
 #WhatsApp media download function
 def download_whatsapp_media(media_id):
     """Download a media file from WhatsApp using its media ID."""
@@ -388,14 +448,84 @@ def receive_message():
         for change in entry.get("changes", []):
             value = change.get("value", {})
 
+            
             for status_update in value.get("statuses", []):
+                whatsapp_message_id = status_update.get("id")
+                delivery_status = status_update.get("status")
+                errors = status_update.get("errors", [])
+
                 print(
                     "WHATSAPP DELIVERY STATUS:",
-                    "message_id =", status_update.get("id"),
-                    "status =", status_update.get("status"),
-                    "errors =", status_update.get("errors"),
+                    "message_id =", whatsapp_message_id,
+                    "status =", delivery_status,
+                    "errors =", errors,
                     flush=True
                 )
+
+                if not whatsapp_message_id or not delivery_status:
+                    continue
+
+                try:
+                    status_connection = mysql.connector.connect(
+                        host=os.getenv("DB_HOST"),
+                        port=int(os.getenv("DB_PORT", "24379")),
+                        database=os.getenv("DB_NAME"),
+                        user=os.getenv("DB_USER"),
+                        password=os.getenv("DB_PASSWORD"),
+                        ssl_disabled=False,
+                        connection_timeout=15,
+                    )
+
+                    status_cursor = status_connection.cursor()
+                    error_details = json.dumps(errors) if errors else None
+
+                    try:
+                        # Always save the event first. This preserves statuses
+                        # that arrive before the scheduled-message tracking row.
+                        status_cursor.execute(
+                            """
+                            INSERT INTO whatsapp_status_events
+                                (whatsapp_message_id, delivery_status, error_details)
+                            VALUES (%s, %s, %s)
+                            """,
+                            (whatsapp_message_id, delivery_status, error_details),
+                        )
+
+                        # Update the tracking row too, if it already exists.
+                        status_cursor.execute(
+                            """
+                            UPDATE scheduled_message_deliveries
+                            SET delivery_status = %s,
+                                error_details = %s
+                            WHERE whatsapp_message_id = %s
+                            """,
+                            (
+                                delivery_status,
+                                error_details,
+                                whatsapp_message_id,
+                            ),
+                        )
+                        status_connection.commit()
+
+                        if status_cursor.rowcount == 0:
+                            print(
+                                "Saved status event; no scheduled-message tracking "
+                                "record exists yet (or this status is for another "
+                                "WhatsApp message):",
+                                whatsapp_message_id,
+                                flush=True
+                            )
+
+                    finally:
+                        status_cursor.close()
+                        status_connection.close()
+
+                except Exception:
+                    logging.exception(
+                        "Could not save WhatsApp delivery status for %s",
+                        whatsapp_message_id,
+                    )
+
 
 
     try:
@@ -519,7 +649,7 @@ def receive_message():
                 if not parsed:
                     reply_text = (
                         "Please use this format:\n"
-                        "Schedule a message to Rahul at 2026-10-26 09:00 "
+                        "Schedule a message to Shantam at 2026-10-26 09:00 "
                         "saying Good morning."
                     )
                 else:
@@ -926,13 +1056,22 @@ def process_due_scheduled_messages():
 
         cursor.execute(
             """
-            SELECT id, recipient_phone, message_text
-            FROM scheduled_messages
-            WHERE status = 'pending'
-              AND scheduled_at <= %s
-            ORDER BY scheduled_at ASC
+            
+            SELECT
+                sm.id,
+                sm.recipient_phone,
+                sm.message_text,
+                COALESCE(c.contact_name, '') AS recipient_name
+            FROM scheduled_messages AS sm
+            LEFT JOIN contacts AS c
+                ON c.phone_number = sm.recipient_phone
+            WHERE sm.status = 'pending'
+            AND sm.scheduled_at <= %s
+            ORDER BY sm.scheduled_at ASC
             LIMIT 20
             FOR UPDATE
+
+            
             """,
             (now,),
         )
@@ -957,19 +1096,88 @@ def process_due_scheduled_messages():
             update_connection = None
             update_cursor = None
 
+            
             try:
-                response = send_whatsapp_message(
+                response = send_whatsapp_template(
                     item["recipient_phone"],
+                    item["recipient_name"] or "there",
                     item["message_text"],
                 )
+
                 if not response.ok:
                     logging.error(
                         "WhatsApp API error for scheduled message %s: HTTP %s - %s",
                         message_id,
                         response.status_code,
-                        response.text
+                        response.text,
                     )
                     response.raise_for_status()
+
+                response_data = response.json()
+                whatsapp_message_id = (
+                    response_data.get("messages", [{}])[0].get("id")
+                )
+
+                if not whatsapp_message_id:
+                    raise ValueError(
+                        "WhatsApp API returned success without a message ID."
+                    )
+
+                tracking_connection = mysql.connector.connect(
+                    host=os.getenv("DB_HOST"),
+                    port=int(os.getenv("DB_PORT", "24379")),
+                    database=os.getenv("DB_NAME"),
+                    user=os.getenv("DB_USER"),
+                    password=os.getenv("DB_PASSWORD"),
+                    ssl_disabled=False,
+                    connection_timeout=15,
+                )
+
+                tracking_cursor = tracking_connection.cursor()
+
+                try:
+                    tracking_cursor.execute(
+                        """
+                        INSERT INTO scheduled_message_deliveries
+                            (scheduled_message_id, whatsapp_message_id, delivery_status)
+                        VALUES (%s, %s, 'accepted')
+                        """,
+                        (message_id, whatsapp_message_id),
+                    )
+
+                    # Reconcile a status webhook that arrived before this row
+                    # was inserted. The highest event ID is the latest received.
+                    tracking_cursor.execute(
+                        """
+                        SELECT delivery_status, error_details
+                        FROM whatsapp_status_events
+                        WHERE whatsapp_message_id = %s
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """,
+                        (whatsapp_message_id,),
+                    )
+                    early_status = tracking_cursor.fetchone()
+
+                    if early_status:
+                        tracking_cursor.execute(
+                            """
+                            UPDATE scheduled_message_deliveries
+                            SET delivery_status = %s,
+                                error_details = %s
+                            WHERE whatsapp_message_id = %s
+                            """,
+                            (
+                                early_status[0],
+                                early_status[1],
+                                whatsapp_message_id,
+                            ),
+                        )
+
+                    tracking_connection.commit()
+                finally:
+                    tracking_cursor.close()
+                    tracking_connection.close()
 
                 new_status = "sent"
                 sent += 1
@@ -977,7 +1185,7 @@ def process_due_scheduled_messages():
             except Exception:
                 failed += 1
                 logging.exception(
-                    "Scheduled message delivery failed: %s",
+                    "Scheduled message processing failed: %s",
                     message_id,
                 )
 
@@ -1022,6 +1230,7 @@ def process_due_scheduled_messages():
                         and update_connection.is_connected()
                     ):
                         update_connection.close()
+
 
         return {"checked": len(messages), "sent": sent, "failed": failed}
 
